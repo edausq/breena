@@ -1,7 +1,6 @@
 package Plugins::Bing;
 use strict qw(subs vars refs);
 use warnings;
-use Switch;
 use POSIX qw(strftime);
 use POE;
 use POE::Component::IRC::Plugin qw( :ALL );
@@ -77,7 +76,6 @@ sub S_public
     if ($msg =~ /^\.g\s(.+)$/)
     {
         my ($dest,$query) = ($1,$2);
-        $query = $prefix . $query;
         my $result = search($query);
         $irc->yield(privmsg => $channel => "$result");
         return PCI_EAT_PLUGIN;    # We don't want other plugins to process this
