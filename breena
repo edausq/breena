@@ -1,0 +1,205 @@
+#!/usr/bin/perl
+# could be helpful:
+# http://poe.perl.org/?POE_Cookbook/IRC_Bots
+# http://poe.perl.org/?POE_Cookbook/IRC_Bot_Debugging
+# http://poe.perl.org/?POE_Cookbook/IRC_Bot_Disconnecting
+# http://poe.perl.org/?POE_Cookbook/IRC_Bot_Reconnecting
+# http://search.cpan.org/~bingos/POE-Component-IRC-6.81/
+
+use warnings;
+use strict;
+use POSIX qw(strftime);
+use POE qw(Component::IRC Component::IRC::Plugin::Connector);
+use POE::Component::IRC;
+use Time::HiRes qw(time);
+use Config::Simple;
+use Convert::Age;
+
+my ($dirpath) = (__FILE__ =~ m{^(.*/)?.*}s);
+if(!$dirpath) { $dirpath = "./"; }
+my $conf_file = "${dirpath}breena.conf";
+
+if($ARGV[0] and -f $ARGV[0]) {
+    $conf_file = $ARGV[0];
+}
+
+print "loading $conf_file\n";
+my $conf = new Config::Simple("$conf_file") or die "unable to find $conf_file";
+my $conf_nick = $conf->param("nick");
+my $conf_nickserv = $conf->param("nickserv");
+my $conf_server = $conf->param("server");
+my $conf_ssl = $conf->param("ssl");
+my $conf_port = $conf->param("port");
+my $conf_channel = $conf->param("channel");
+my $conf_key = $conf->param("key");
+my $conf_debug = $conf->param("debug");
+
+sub CHANNEL () { "$conf_channel" }
+
+my ($irc) = POE::Component::IRC->spawn();
+
+POE::Session->create(
+    inline_states => {
+        _start              => \&bot_start,
+        connect             => \&bot_connect,
+        irc_001             => \&on_connect,
+        irc_public          => \&on_public,
+        irc_quit            => \&on_quit,
+        irc_disconnected    => \&bot_reconnect,
+        bot_timer           => \&bot_timer,
+    },
+);
+
+opendir my($dh), "${dirpath}Plugins" or die "[1] Couldn't open dir '$dirpath': $!";
+my @plugins_files = readdir $dh;
+closedir $dh;
+
+my @extra_files;
+if(opendir my($dh2), "${dirpath}breenaExtras")
+{
+    @extra_files = readdir $dh2;
+    closedir $dh2;
+
+    foreach my $extra (@extra_files)
+    {
+        if($extra =~ m/^([A-Z]{1}[A-Za-z0-9]*)\.pm$/)
+        {
+            print "Load extra: $1\n";
+            my $module = "breenaExtras::$1";
+            eval
+            {
+                (my $file = $module) =~ s|::|/|g;
+                require "${dirpath}$file" . '.pm';
+                my $loading_plugin = $module->new();
+                $irc->plugin_add($module,$loading_plugin);
+            };
+            if ($@)
+            {
+                warn "Error including $module: $@";
+            }
+        }
+    }
+}
+
+foreach my $plugin (@plugins_files)
+{
+    if($plugin =~ m/^([A-Z]{1}[A-Za-z0-9]*)\.pm$/)
+    {
+        print "Load plugin: $1\n";
+        my $module = "Plugins::$1";
+        eval
+        {
+            (my $file = $module) =~ s|::|/|g;
+            require "${dirpath}$file" . '.pm';
+            my $loading_plugin = $module->new();
+            $irc->plugin_add($module,$loading_plugin);
+        };
+        if ($@)
+        {
+            warn "Error including $module: $@";
+        }
+    }
+}
+
+sub bot_connect
+{
+    my ($kernel, $heap) = @_[KERNEL ,HEAP];
+    $irc->yield(register => "all");
+    $heap->{connector} = POE::Component::IRC::Plugin::Connector->new();
+    $irc->plugin_add( 'Connector' => $heap->{connector} );
+    $irc->yield(
+        connect => {
+            Nick            => "$conf_nick",
+            Username        => "$conf_nick",
+            Ircname         => 'breena',
+            Server          => "$conf_server",
+            Port            => "$conf_port",
+            UseSSL          => "$conf_ssl",
+            debug           => "$conf_debug",
+            plugin_debug    => "$conf_debug",
+        }
+    );
+}
+
+sub bot_start
+{
+    my ($kernel, $heap) = @_[KERNEL, HEAP];
+    $kernel->yield("connect");
+}
+
+sub on_connect
+{
+    $irc->yield(privmsg => 'nickserv' => "identify $conf_nickserv");
+    $irc->yield(join => "$conf_channel $conf_key");
+}
+
+sub bot_reconnect
+{
+    my ($kernel, $heap) = @_[KERNEL, HEAP];
+    $kernel->delay(connect => 60);
+}
+
+sub bot_timer
+{
+    $irc->yield(privmsg => "$conf_channel" => "$_[ARG1]: ding!$_[ARG0]")
+}
+
+sub on_public
+{
+    my ($kernel, $who, $where, $msg) = @_[KERNEL, ARG0, ARG1, ARG2];
+    my $nick    = (split /!/, $who)[0];
+    my $channel = $where->[0];
+    my $ts      = scalar localtime;
+
+    if ($msg =~ /^t\s(\w*[smhdw]{1})$/ or $msg =~/^t\s(\w*[smhdw]{1})\s+(.+)$/)
+    {
+        my $seconds = $1;
+        my $task = '';
+        if($2)
+        {
+            $task = " $2";
+        }
+
+        $seconds =~ s/[^smhdw\d]//gi;
+        $seconds =~ s/(\d+)(\D{1})(\d+)/$1$2+$3/g;
+        $seconds =~ s/(\d+)(\D{1})(\d+)/$1$2+$3/g;
+        $seconds =~ s/s//gi;
+        $seconds =~ s/m/*60/gi;
+        $seconds =~ s/h/*3600/gi;
+        $seconds =~ s/d/*3600*24/gi;
+        $seconds =~ s/w/*3600*24*7/gi;
+        $seconds = eval($seconds);
+        if($seconds =~ /^\d+$/)
+        {
+            my $ding = $seconds+time();
+            my $diff = strftime("%j", localtime($ding)) - strftime("%j", localtime(time()));
+            my $str = 'internal error';
+            if($diff == 0)
+            {
+                $str = strftime("today at %H:%M:%S", localtime($ding));
+            }
+            elsif($diff == 1)
+            {
+                $str = strftime("tomorrow at %H:%M:%S", localtime($ding));
+            }
+            else
+            {
+                $str = strftime("on %d/%m/%Y at %H:%M:%S", localtime($ding));
+            }
+
+            $irc->yield(privmsg => $channel => "[timer added]$task (".Convert::Age::encode($seconds)." - ding $str)");
+            $_[KERNEL]->delay_add(bot_timer => $seconds, $task, $nick);
+        }
+        else
+        {
+            $irc->yield(privmsg => $channel => "$nick, usage: t 1w1d2h42m10s [task]");
+        }
+    }
+    elsif($msg =~ /^t\s.+/)
+    {
+        $irc->yield(privmsg => $channel => "$nick, usage: t 1w1d2h42m10s [task]");
+    }
+}
+
+$poe_kernel->run();
+exit 0;

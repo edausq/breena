@@ -1,0 +1,11 @@
+nick: breena
+nickserv: password
+channel: #breena
+key: p@ssword
+server: chat.freenode.net
+port: 6667
+ssl: false
+debug: false
+google-api: 
+openweathermap-api:
+bing-api:

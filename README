@@ -1,0 +1,1 @@
+grep -hr ^use breena Plugins/* | grep -P 'use \K[A-Z]{1}.*?[\s;]' -o | tr -d '; ' | sort -u | tr '\n' ' '
