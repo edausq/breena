@@ -1,4 +1,4 @@
-package Plugins::Bing;
+package Plugins::Google;
 use strict qw(subs vars refs);
 use warnings;
 use POSIX qw(strftime);
