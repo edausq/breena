@@ -13,8 +13,9 @@ use URI::Escape;
 my $conf_file = "/etc/breena/breena.conf";
 
 my $conf = new Config::Simple("$conf_file") or die "impossible de trouver $conf_file";
-my $apikey = $conf->param("bing-api");
-# https://datamarket.azure.com/dataset/bing/search
+my $searchid = $conf->param("google-search-id");
+my $apikey = $conf->param("google-search-api");
+# https://developers.google.com/custom-search/json-api/v1/using_rest
 
 # Plugin object constructor
 sub new
@@ -41,21 +42,20 @@ sub search
     my $ua = LWP::UserAgent->new(timeout => 5);
     $ua->default_header('Accept' => 'application/json');
 
-    my $request = GET "https://api.datamarket.azure.com/Bing/Search/v1/Web?Query=%27".uri_escape($query)."%27&Market=%27fr-FR%27";
-    $request->authorization_basic($apikey, $apikey);
+    my $request = GET "https://www.googleapis.com/customsearch/v1?key=".$apikey."&cx=".$searchid."&q=".uri_escape($query)."&num=1";
     my $response = $ua->request($request);
 
     if ($response->is_success)
     {
-        my $bing_json = $response->content;
-        my $bing = from_json($bing_json);
-        if(defined $bing->{d}->{results}[0])
+        my $google_json = $response->content;
+        my $google = from_json($google_json);
+        if(defined $google->{items}[0])
         {
-            return $bing->{d}->{results}[0]->{Title} . " - " . $bing->{d}->{results}[0]->{Url};
+            return $google->{items}[0]->{title} . " - " . $google->{items}[0]->{link};
         }
         else
         {
-            return "No results. Try https://duckduckgo.com/?q=".uri_escape($query);
+            return "No results. Try https://www.google.com/search?q=/?q=".uri_escape($query);
         }
     }
     else
@@ -75,8 +75,7 @@ sub S_public
 
     if ($msg =~ /^\.g\s(.+)$/)
     {
-        my ($dest,$query) = ($1,$2);
-        my $result = search($query);
+        my $result = search($1);
         $irc->yield(privmsg => $channel => "$result");
         return PCI_EAT_PLUGIN;    # We don't want other plugins to process this
     }
